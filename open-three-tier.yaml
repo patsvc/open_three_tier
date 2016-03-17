@@ -1,0 +1,396 @@
+heat_template_version: 2013-05-23
+
+description: >
+  A document-based template to configure your Software Defined Environment.
+
+parameters:
+  authentication_user:
+      type: string
+      description: The user connecting to Salt API
+      default: saltuser
+ 
+  authentication_pass:
+      type: string
+      description: Password for connecting to Salt API
+      hidden: True
+      default: us3rpa88
+      
+  flavor:
+    type: string
+    description: Flavor to be used for compute instance
+    default: "m1.small"
+  
+  environment:
+    type: string
+    description: The environment the nodes are part of
+    default: three_tier_lamp
+   
+  salt_pillar:
+    type: string
+    description: Minion Pillar data
+    default: '''{"service_port":"80","im_repo":"http://192.168.0.29/imrepo/","artifact_repo_root":"http://192.168.0.29/","mysql_password":"SomeP4ssw0rd"}'''
+
+  image:
+    type: string
+    description: Generated
+    default: '20ba0453-a0b2-4b44-9a50-2a308e3e939a'
+
+  key_name:
+    type: string
+    description: Generated
+
+  network_id_fbd19302-f247-4816-b53e-a664f3dc72c1:
+    type: string
+    description: Generated to reference 'patterns-service-dev-net' network.
+    default: 'fbd19302-f247-4816-b53e-a664f3dc72c1'
+
+  public_network_id:
+    type: string
+    description: Generated for floating IP
+    default: 'TODO'
+resources:
+## REFERENCE {"fbd19302-f247-4816-b53e-a664f3dc72c1":{"type": "OS::Neutron::Net", "properties": {"name": "patterns-service-dev-net", "network_id": "fbd19302-f247-4816-b53e-a664f3dc72c1", "external":"false", "subnets": [{"id":"46fcd6d7-017e-437b-9921-d7fb9f76a7f2","name":"patterns-service-dev-subnet","cidr":"192.168.15.0\/24"}] }}}
+ 
+  rhel_server_one:
+    type: OS::Nova::Server
+    properties:
+      networks:
+          - port: { get_resource: server_one_fbd19302-f247-4816-b53e-a664f3dc72c1_port  }
+      name: load balancer
+      key_name: { get_param: key_name }
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      config_drive: "True"
+      user_data_format: RAW
+      user_data:
+        get_resource: server_one_init
+         
+  
+  server_one_init:
+    type: OS::Heat::MultipartMime
+    properties:
+      parts:
+      - config: {get_resource: bootstrap_salt}
+      - config: {get_resource: haproxy}
+      
+  server_four_init:
+    type: OS::Heat::MultipartMime
+    depends_on: [ rhel_server_two, rhel_server_three ]
+    properties:
+      parts:
+      - config: {get_resource: bootstrap_salt}
+      - config: {get_resource: mysql}
+      - config: {get_resource: execute_orchestration}
+    
+  
+  bootstrap_salt:
+    type: "OS::Heat::SoftwareConfig"
+    properties:
+      config:
+        str_replace:
+          template: |
+            #!/usr/bin/env bash
+            chkconfig salt-minion on
+            mkdir -p /etc/salt/pki/minion
+     
+            ### Minion Configuration 
+            HOSTNAME=`hostname -s`
+            DELIMITER="_"
+            MINION_NAME=$HOSTNAME$DELIMITER$IDENTIFIER
+            echo "master: 192.168.0.34" > /etc/salt/minion
+            echo "id: $MINION_NAME" >> /etc/salt/minion
+            echo "mine_functions: " >> /etc/salt/minion
+            echo "  network.interfaces: []" >> /etc/salt/minion
+            echo "  grains.items: []" >> /etc/salt/minion           
+            ##### Minion license authenication with master 
+            curl -Ssk https://192.168.0.34:8443/login -H 'Accept: application/x-yaml' -d username=$USER -d password=$PASS -d eauth=pam | awk '/token/ {printf $2}' > ~/token
+            service salt-minion start
+            sleep 30      
+            curl -Ssk https://192.168.0.34:8443/hook/minions/key/accept -H 'Accept: application/x-yaml' -H "X-Auth-Token: `cat ~/token`" -d minion=$MINION_NAME
+            rm -f ~/token           
+          params:
+            $USER: { get_param: authentication_user}
+            $PASS: { get_param: authentication_pass}
+            $IDENTIFIER: { get_param: 'OS::stack_name' }
+    
+          
+  haproxy:
+    type: "OS::Heat::SoftwareConfig"
+    properties:
+      config:
+        str_replace:
+          template: |
+            #!/usr/bin/env bash 
+            #TODO support multiple roles. 
+            roles=$ROLES
+            #Create unique role names to ensure correct minion deployment. 
+            #TODO include vm id for metering.
+            UNIQUE_ROLE_ID="$ROLES_$IDENTIFIER"
+            TARGET='"G@environment:$ENV and G@roles:'"$UNIQUE_ROLE_ID"'"' 
+            echo "environment:" > /etc/salt/grains
+            echo "  $ENV" >> /etc/salt/grains
+            echo "identifier:" >> /etc/salt/grains
+            echo "  $IDENTIFIER" >> /etc/salt/grains   
+            echo "roles:">> /etc/salt/grains
+            echo "  $UNIQUE_ROLE_ID" >> /etc/salt/grains
+            service salt-minion restart
+            sleep 30
+            #Build Dynamic top.sls
+            #PRE Create Server Prequiestes entry
+            salt-call event.send 'generate/environment' '{name: "servers_prereqs", sid: "$IDENTIFIER",  tgt: "'identifier:$IDENTIFIER'", tgt_type: "grain", salt_env: "$ENV", sls: "'["base"]'", include_pillar: "true" }'
+            #Salt state entry - define work of saltstate 
+            salt-call event.send 'generate/environment' '{name:'" $UNIQUE_ROLE_ID"', sid: "$IDENTIFIER",  tgt:'" $TARGET"', tgt_type: "compound", salt_env: "$ENV", sls: $SLS , include_pillar: "true" }'      
+          params:
+            $ENV: { get_param: environment }
+            $ROLES: haproxy
+            $IDENTIFIER: { get_param: 'OS::stack_name' }
+            $SLS: '["haproxy","zeron"]'
+  
+ 
+  execute_orchestration:
+    type: "OS::Heat::SoftwareConfig"
+    properties:
+      config:
+        str_replace:
+          template: |
+            #!/usr/bin/env bash
+            #########Use dynamic top file
+            DYNAMIC_ORCHESTRATION="top_$IDENTIFIER"
+            DYNAMIC_ENVIRONEMENT="deployment"
+            echo "orchestrator:" >> /etc/salt/grains
+            echo "  master" >> /etc/salt/grains
+            echo "orchestration:" >> /etc/salt/grains
+            echo "  $DYNAMIC_ORCHESTRATION" >> /etc/salt/grains           
+            echo "{$PILLAR}" > /etc/salt/pillar
+            curl -Ssk https://192.168.0.34:8443/login -H 'Accept: application/x-yaml' -d username=$USER \
+                -d password=$PASS -d eauth=pam | awk '/token/ {printf $2}' > ~/token
+            curl -Ssk https://192.168.0.34:8443/hook/cmd/run_bla -H 'Accept: application/x-yaml' \
+                -H "X-Auth-Token: `cat ~/token`" -d orchestration="$DYNAMIC_ORCHESTRATION" -d environment="$DYNAMIC_ENVIRONEMENT" \
+                -d pillar=$PILLAR -d wait_url='''$WAIT_URL'''
+            rm -f ~/token
+          params:
+            $USER: { get_param: authentication_user}
+            $PASS: { get_param: authentication_pass}
+            $ORCHESTRATION: 3tier_lamp
+            $ENV: { get_param: environment }
+            $PILLAR: { get_param: salt_pillar }
+            $WAIT_URL: { get_resource: wait_handle }
+            $IDENTIFIER: { get_param: 'OS::stack_name' }
+ 
+  rhel_server_two:
+    type: OS::Nova::Server
+    depends_on: rhel_server_one
+    properties:
+      networks:
+          - port: { get_resource: server_two_fbd19302-f247-4816-b53e-a664f3dc72c1_port  }
+      name: webserver1
+      image: { get_param: image }
+      key_name: { get_param: key_name }
+      flavor: { get_param: flavor }
+      config_drive: "True"
+      user_data_format: RAW
+      user_data:
+        get_resource: server_two_init
+  
+  
+  apache:
+    type: "OS::Heat::SoftwareConfig"
+    depends_on: haproxy
+    properties:
+      config:
+        str_replace:
+          template: |
+            #!/usr/bin/env bash 
+            #TODO support multiple roles. 
+            roles=$ROLES
+            #Create unique role names to ensure correct minion deployment. 
+            #TODO include vm id for metering.
+            UNIQUE_ROLE_ID="$ROLES_$IDENTIFIER"
+            TARGET='"G@environment:$ENV and G@roles:'"$UNIQUE_ROLE_ID"'"' 
+            echo "environment:" > /etc/salt/grains
+            echo "  $ENV" >> /etc/salt/grains
+            echo "identifier:" >> /etc/salt/grains
+            echo "  $IDENTIFIER" >> /etc/salt/grains   
+            echo "roles:">> /etc/salt/grains
+            echo "  $UNIQUE_ROLE_ID" >> /etc/salt/grains
+            service salt-minion restart
+            sleep 60
+            #Build Dynamic top.sls
+            #POST Signal entry to tell stack its complete. 
+            salt-call event.send 'generate/environment' '{name:'" $UNIQUE_ROLE_ID"', sid: "$IDENTIFIER",  tgt:'" $TARGET"', tgt_type: "compound", salt_env: "$ENV", sls: $SLS , include_pillar: "true" }'         
+          params:
+            $ENV: { get_param: environment }
+            $ROLES: apache
+            $IDENTIFIER: { get_param: 'OS::stack_name' }
+            $SLS: '["apache","zeron"]'
+
+  
+  apache_two:
+    type: "OS::Heat::SoftwareConfig"
+    depends_on: haproxy
+    properties:
+      config:
+        str_replace:
+          template: |
+            #!/usr/bin/env bash 
+            #TODO support multiple roles. 
+            roles=$ROLES
+            #Create unique role names to ensure correct minion deployment. 
+            #TODO include vm id for metering.
+            UNIQUE_ROLE_ID="$ROLES_$IDENTIFIER"
+            TARGET='"G@environment:$ENV and G@roles:'"$UNIQUE_ROLE_ID"'"' 
+            echo "environment:" > /etc/salt/grains
+            echo "  $ENV" >> /etc/salt/grains
+            echo "identifier:" >> /etc/salt/grains
+            echo "  $IDENTIFIER" >> /etc/salt/grains              
+            echo "roles:">> /etc/salt/grains
+            echo "  $UNIQUE_ROLE_ID" >> /etc/salt/grains
+            service salt-minion restart
+            sleep 60        
+          params:
+            $ENV: { get_param: environment }
+            $ROLES: apache
+            $IDENTIFIER: { get_param: 'OS::stack_name' }
+            $SLS: '["apache","zeron"]'
+  
+  
+  mysql:
+    type: "OS::Heat::SoftwareConfig"
+    depends_on: [ apache, apache_two] 
+    properties:
+      config:
+        str_replace:
+          template: |
+            #!/usr/bin/env bash 
+            #TODO support multiple roles. 
+            roles=$ROLES
+            #Create unique role names to ensure correct minion deployment. 
+            #TODO include vm id for metering.
+            UNIQUE_ROLE_ID="$ROLES_$IDENTIFIER"
+            TARGET='"G@environment:$ENV and G@roles:'"$UNIQUE_ROLE_ID"'"' 
+            echo "environment:" > /etc/salt/grains
+            echo "  $ENV" >> /etc/salt/grains
+            echo "identifier:" >> /etc/salt/grains
+            echo "  $IDENTIFIER" >> /etc/salt/grains   
+            echo "roles:">> /etc/salt/grains
+            echo "  $UNIQUE_ROLE_ID" >> /etc/salt/grains
+            service salt-minion restart
+            sleep 70
+            #Build Dynamic top.sls
+            #PRE Create Server Prequiestes entry
+            salt-call event.send 'generate/environment' '{name:'" $UNIQUE_ROLE_ID"', sid: "$IDENTIFIER",  tgt:'" $TARGET"', tgt_type: "compound", salt_env: "$ENV", sls: $SLS , include_pillar: "true" }'
+            #POST Signal entry to tell stack its complete. 
+            salt-call event.send 'generate/environment' '{name: "orchestration_finished", sid: "$IDENTIFIER",  tgt: "G@environment:$ENV and G@orchestrator:master", tgt_type: "compound", salt_env: "$ENV", sls: "'["base.signal"]'", include_pillar: "true" }'
+          params:
+            $ENV: { get_param: environment }
+            $ROLES: mysql
+            $IDENTIFIER: { get_param: 'OS::stack_name' }
+            $SLS: '["mysql","zeron"]'
+  
+  wait_condition:
+    type: "AWS::CloudFormation::WaitCondition"
+    depends_on: rhel_server_four
+    properties:
+      Handle: { get_resource: wait_handle }
+      Timeout: 1500
+
+  wait_handle:
+    type: "AWS::CloudFormation::WaitConditionHandle"
+       
+  server_two_init:
+    type: OS::Heat::MultipartMime
+    depends_on: rhel_server_one
+    properties:
+      parts:
+      - config: {get_resource: bootstrap_salt}
+      - config: {get_resource: apache}
+
+  server_three_init:
+    type: OS::Heat::MultipartMime
+    depends_on: rhel_server_one
+    properties:
+      parts:
+      - config: {get_resource: bootstrap_salt}
+      - config: {get_resource: apache_two}
+              
+  server_one_server_one_fbd19302-f247-4816-b53e-a664f3dc72c1_port_floating_ip:
+    type: OS::Neutron::FloatingIP
+    properties:
+      floating_network_id: { get_param: public_network_id }
+      port_id: { get_resource: server_one_fbd19302-f247-4816-b53e-a664f3dc72c1_port }
+
+  server_one_fbd19302-f247-4816-b53e-a664f3dc72c1_port:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_param: network_id_fbd19302-f247-4816-b53e-a664f3dc72c1 }
+
+ 
+
+
+  server_two_fbd19302-f247-4816-b53e-a664f3dc72c1_port:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_param: network_id_fbd19302-f247-4816-b53e-a664f3dc72c1 }
+
+  rhel_server_three:
+    type: OS::Nova::Server
+    depends_on: rhel_server_one
+    properties:
+      networks:
+          - port: { get_resource: server_three_fbd19302-f247-4816-b53e-a664f3dc72c1_port  }
+      name: webserver2
+      image: { get_param: image }
+      key_name: { get_param: key_name }
+      flavor: { get_param: flavor }
+      config_drive: "True"
+      user_data_format: RAW
+      user_data:
+        get_resource: server_three_init
+
+
+  server_three_fbd19302-f247-4816-b53e-a664f3dc72c1_port:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_param: network_id_fbd19302-f247-4816-b53e-a664f3dc72c1 }
+
+  rhel_server_four:
+    type: OS::Nova::Server
+    depends_on: [ rhel_server_two, rhel_server_three ]
+    properties:      
+      networks:
+          - port: { get_resource: server_four_fbd19302-f247-4816-b53e-a664f3dc72c1_port  }
+      name: database
+      image: { get_param: image }
+      key_name: { get_param: key_name }
+      flavor: { get_param: flavor }
+      config_drive: "True"
+      user_data_format: RAW
+      user_data:
+        get_resource: server_four_init
+            
+
+  server_four_fbd19302-f247-4816-b53e-a664f3dc72c1_port:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_param: network_id_fbd19302-f247-4816-b53e-a664f3dc72c1 }
+
+outputs:
+  blueprint_url:
+    description: Blueprint Origin URL
+    value:  http://9.27.175.179:8080/landscaper/view/projects?open=ucdpadmin_00000000_0000_0000_0000_000000000002-OrionContent/default/open_tier_lamp/three_tier_lamp.yml
+    
+  zeron_url:
+    description: zeron console
+    value: 
+      str_replace:
+        template: http://HOST:8000
+        params:
+          HOST: { get_attr:[server_one_server_one_fbd19302-f247-4816-b53e-a664f3dc72c1_port_floating_ip, floating_ip_address] }
+  
+  ha_proxy_url:
+    description: haproxy url
+    value: 
+      str_replace:
+        template: http://HOST:80
+        params:
+          HOST: { get_attr:[server_one_server_one_fbd19302-f247-4816-b53e-a664f3dc72c1_port_floating_ip, floating_ip_address] }
