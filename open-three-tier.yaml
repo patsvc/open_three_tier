@@ -1,7 +1,7 @@
 heat_template_version: 2013-05-23
 
 description: >
-  A document-based template to configure your Software Defined Environment.
+  A blueprint that defines the Open Three Tier pattern. This stack includes a high-availability Apache Tomcat proxy server, two load-balanced Apache HTTP servers, and a MySQL database.
 
 parameters:
   authentication_user:
