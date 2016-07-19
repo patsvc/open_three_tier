@@ -13,7 +13,6 @@ parameters:
       type: string
       description: Password for connecting to Salt API
       hidden: True
-      default: us3rpa88
       
   flavor:
     type: string
