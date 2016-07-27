@@ -4,39 +4,63 @@ description: >
   A blueprint that defines the Open Three Tier pattern. This stack includes a high-availability Apache Tomcat proxy server, two load-balanced Apache HTTP servers, and a MySQL database.
 
 parameters:
-  authentication_user:
-      type: string
-      description: The user connecting to Salt API
-      default: saltuser
- 
-  authentication_pass:
-      type: string
-      description: Password for connecting to Salt API
-      hidden: True
-      
+  security_group:
+    type: string
+    description: 'Name of the security group'
+    default: 'default'
+
+############################
+# Salt Specific Parameters
+############################
+
+  mysql_password: 
+    description: This is the password for the mysql database
+    label: Password (root)
+    type: string
+    hidden: True
+
+  salt_master_address:
+    type: string
+    description: Hostname/IP address of the salt-master 
+    label: Saltmaster address
+
+  salt_api_token:
+    type: string
+    description: Security token for connecting to Salt API
+    label: Salt api token
+    hidden: True
+
+  sw_repo_root:
+    default: 'http://134.168.48.212:6111/sw_repo/'
+    description: Software repository URL (e.g. http://x.x.x.x:8080/
+    label: Software Repository URL
+    type: string 
+
   flavor:
     type: string
     description: Flavor to be used for compute instance
-    default: "m1.small"
-  
-  environment:
-    type: string
-    description: The environment the nodes are part of
-    default: three_tier_lamp
-   
-  salt_pillar:
-    type: string
-    description: Minion Pillar data
-    default: '''{"service_port":"80","im_repo":"http://192.168.0.29/imrepo/","artifact_repo_root":"http://192.168.0.29/","mysql_password":"SomeP4ssw0rd"}'''
+    label: Flavor
+    constraints:
+    - custom_constraint: nova.flavor
 
-  image:
+  security_group:
     type: string
-    description: Generated
-    default: '20ba0453-a0b2-4b44-9a50-2a308e3e939a'
+    description: 'Name of the security group'
+    default: 'default'
+   
+  image_id:
+    type: string
+    description: OS Image to deploy onto
+    label: OS Image
+    constraints:
+    - custom_constraint: glance.image
 
   key_name:
     type: string
-    description: Generated
+    description: 'For most clouds, the name of the key-pair to be used for the compute instance; for VMware clouds, the contents of the public SSH key for the compute instance'
+    label: SSH Key name
+    constraints:
+    - custom_constraint: nova.keypair
 
   network_id_fbd19302-f247-4816-b53e-a664f3dc72c1:
     type: string
@@ -47,6 +71,11 @@ parameters:
     type: string
     description: Generated for floating IP
     default: 'TODO'
+
+parameter_groups:
+    - { label: 'Image Parameters', parameters: [flavor, key_name, image_id] }
+    - { label: 'Hidden Parameters', parameters: [salt_master_address, salt_api_token, sw_repo_root] }
+
 resources:
 ## REFERENCE {"fbd19302-f247-4816-b53e-a664f3dc72c1":{"type": "OS::Neutron::Net", "properties": {"name": "patterns-service-dev-net", "network_id": "fbd19302-f247-4816-b53e-a664f3dc72c1", "external":"false", "subnets": [{"id":"46fcd6d7-017e-437b-9921-d7fb9f76a7f2","name":"patterns-service-dev-subnet","cidr":"192.168.15.0\/24"}] }}}
  
@@ -57,7 +86,7 @@ resources:
           - port: { get_resource: server_one_fbd19302-f247-4816-b53e-a664f3dc72c1_port  }
       name: load balancer
       key_name: { get_param: key_name }
-      image: { get_param: image }
+      image: { get_param: image_id }
       flavor: { get_param: flavor }
       config_drive: "True"
       user_data_format: RAW
@@ -79,7 +108,8 @@ resources:
       parts:
       - config: {get_resource: bootstrap_salt}
       - config: {get_resource: mysql}
-      - config: {get_resource: execute_orchestration}
+      - config: {get_resource: create_pillar_file}
+      - config: {get_resource: run_orchestration}
     
   
   bootstrap_salt:
@@ -89,28 +119,55 @@ resources:
         str_replace:
           template: |
             #!/usr/bin/env bash
-            chkconfig salt-minion on
+            set -e
+            if [ -f /etc/redhat-release ]; then
+              curl -k "$SW_REPO_ROOTsalt/saltstack-latest-el$(rpm -qf --qf "%{VERSION}" /etc/redhat-release | cut -c1).x86_64.rpm" -o /tmp/salt.rpm >> /tmp/log 2>&1
+              rpm -Uvh /tmp/salt.rpm
+              #rpm -Uvh "$SW_REPO_ROOTsalt/saltstack-latest-el$(rpm -qf --qf "%{VERSION}" /etc/redhat-release | cut -c1).x86_64.rpm"
+            elif [ -f /etc/lsb-release ]; then
+              curl -k "$SW_REPO_ROOTsalt/saltstack-latest-trusty.x86_64.deb" -O
+              dpkg -i saltstack-latest-trusty.x86_64.deb
+              update-rc.d salt-minion start 80 2 3 4 5 .
+            fi
+            #chkconfig salt-minion on
             mkdir -p /etc/salt/pki/minion
-     
-            ### Minion Configuration 
-            HOSTNAME=`hostname -s`
-            DELIMITER="_"
-            MINION_NAME=$HOSTNAME$DELIMITER$IDENTIFIER
-            echo "master: 192.168.0.34" > /etc/salt/minion
-            echo "id: $MINION_NAME" >> /etc/salt/minion
-            echo "mine_functions: " >> /etc/salt/minion
-            echo "  network.interfaces: []" >> /etc/salt/minion
-            echo "  grains.items: []" >> /etc/salt/minion           
-            ##### Minion license authenication with master 
-            curl -Ssk https://192.168.0.34:8443/login -H 'Accept: application/x-yaml' -d username=$USER -d password=$PASS -d eauth=pam | awk '/token/ {printf $2}' > ~/token
+            
+            # retrieve saltMaster address from metadata if not passed
+            saltMaster=$SALT_MASTER
+            echo "master"$saltMaster >> /tmp/master
+            token=$SALT_API_TOKEN
+            echo "token"$token >> /tmp/master
+            if [ -z $saltMaster ] ; then
+              echo "no master" >> /tmp/master
+              saltMaster=$(curl -s -k $SW_REPO_ROOTmetadata.yaml | awk '/salt_api_ip/ {print $2}')
+            fi
+
+            # Default log_level warning            
+            cat > /etc/salt/minion << EOF
+            log_level: warning
+            master:
+              - $saltMaster
+            id: $STACK_ID-`hostname -s`
+            mine_functions:
+              network.interfaces: []
+              grains.items: []
+            mine_interval: 1
+            EOF
+            
+            service salt-minion stop
+            sleep 10
             service salt-minion start
-            sleep 30      
-            curl -Ssk https://192.168.0.34:8443/hook/minions/key/accept -H 'Accept: application/x-yaml' -H "X-Auth-Token: `cat ~/token`" -d minion=$MINION_NAME
-            rm -f ~/token           
+            sleep 30
+
+            curl -k $SW_REPO_ROOTsalt/salt-wrapper.py -o /opt/saltstack/embedded/bin/salt-wrapper.py
+
+            /opt/saltstack/embedded/bin/salt-wrapper.py register dummyUser dummyPass -k $SALT_API_TOKEN
           params:
-            $USER: { get_param: authentication_user}
-            $PASS: { get_param: authentication_pass}
-            $IDENTIFIER: { get_param: 'OS::stack_name' }
+            $STACK_ID: { get_param: "OS::stack_id" }
+            $SALT_MASTER: { get_param: salt_master_address }
+            $SALT_API_TOKEN: { get_param: salt_api_token }
+            $SW_REPO_ROOT: {get_param: sw_repo_root }
+
     
           
   haproxy:
@@ -144,37 +201,78 @@ resources:
             $ROLES: haproxy
             $IDENTIFIER: { get_param: 'OS::stack_name' }
             $SLS: '["haproxy","zeron"]'
-  
- 
-  execute_orchestration:
+
+  create_pillar_file:
     type: "OS::Heat::SoftwareConfig"
     properties:
       config:
         str_replace:
           template: |
             #!/usr/bin/env bash
-            #########Use dynamic top file
-            DYNAMIC_ORCHESTRATION="top_$IDENTIFIER"
-            DYNAMIC_ENVIRONEMENT="deployment"
-            echo "orchestrator:" >> /etc/salt/grains
-            echo "  master" >> /etc/salt/grains
-            echo "orchestration:" >> /etc/salt/grains
-            echo "  $DYNAMIC_ORCHESTRATION" >> /etc/salt/grains           
-            echo "{$PILLAR}" > /etc/salt/pillar
-            curl -Ssk https://192.168.0.34:8443/login -H 'Accept: application/x-yaml' -d username=$USER \
-                -d password=$PASS -d eauth=pam | awk '/token/ {printf $2}' > ~/token
-            curl -Ssk https://192.168.0.34:8443/hook/cmd/run_bla -H 'Accept: application/x-yaml' \
-                -H "X-Auth-Token: `cat ~/token`" -d orchestration="$DYNAMIC_ORCHESTRATION" -d environment="$DYNAMIC_ENVIRONEMENT" \
-                -d pillar=$PILLAR -d wait_url='''$WAIT_URL'''
-            rm -f ~/token
+            set -e
+            totalMemory=`free -m | grep Mem | awk '{print $2}'`
+            if [ $totalMemory -le 1024 ]; then
+                initialHeapSize=512
+                maximumHeapSize=1024
+            elif [ $totalMemory -gt 1024 -a $totalMemory -le 2048 ]; then
+                initialHeapSize=1024
+                maximumHeapSize=2048
+            elif [ $totalMemory -gt 2048 -a $totalMemory -le 4096 ]; then
+                initialHeapSize=2048
+                maximumHeapSize=4096
+            elif [ $totalMemory -gt 4096 ]; then
+                initialHeapSize=4096
+                maximumHeapSize=8192
+            fi
+            cat << EOF > /tmp/pillar.yaml
+            service_port: 80
+            im_repo: http://192.168.0.29/imrepo/
+            artifact_repo_root: http://134.168.48.212:6111/sw_repo/
+            mysql_password: $MYSQL_PASSWORD
+            ibm:
+              sw_repo_root: $SW_REPO_ROOT
+            EOF
           params:
-            $USER: { get_param: authentication_user}
-            $PASS: { get_param: authentication_pass}
+            $SW_REPO_ROOT: {get_param: sw_repo_root }
+            $profile_name: {get_param: was_profile_name}
+            $MYSQL_PASSWORD: {get_param: mysql_password}
+
+  run_orchestration:
+    type: "OS::Heat::SoftwareConfig"
+    properties:
+      config:
+        str_replace:
+          template: |
+            #!/usr/bin/env bash
+            set -e
+            /opt/saltstack/embedded/bin/salt-wrapper.py orchestrate_heat dummyUser dummyPass \
+              --environment $ENV \
+              --automation $WORKLOAD_AUTOMATION \
+              --orchestration $ORCHESTRATION \
+              --wait_url '$WAIT_URL' \
+              --stack_id $STACK_ID \
+              --pillar_file /tmp/pillar.yaml \
+              --pillar stack_id=$STACK_ID \
+              --reactor_flask \
+              --salt_token $SALT_API_TOKEN
+
+            echo  "            /opt/saltstack/embedded/bin/salt-wrapper.py orchestrate_heat dummyUser dummyPass \
+              --environment $ENV \
+              --automation $WORKLOAD_AUTOMATION \
+              --orchestration $ORCHESTRATION \
+              --wait_url '$WAIT_URL' \
+              --stack_id $STACK_ID \
+              --pillar_file /tmp/pillar.yaml \
+              --pillar stack_id=$STACK_ID" \
+              --reactor_flask \
+              --salt_token $SALT_API_TOKEN >> /tmp/test
+          params:
+            $SALT_API_TOKEN: { get_param: salt_api_token}
+            $ENV: base
+            $WORKLOAD_AUTOMATION:  ibm_was
             $ORCHESTRATION: 3tier_lamp
-            $ENV: { get_param: environment }
-            $PILLAR: { get_param: salt_pillar }
-            $WAIT_URL: { get_resource: wait_handle }
-            $IDENTIFIER: { get_param: 'OS::stack_name' }
+            $STACK_ID:      { get_param: "OS::stack_id" }
+            $WAIT_URL:      { get_resource: wait_handle }
  
   rhel_server_two:
     type: OS::Nova::Server
@@ -183,7 +281,7 @@ resources:
       networks:
           - port: { get_resource: server_two_fbd19302-f247-4816-b53e-a664f3dc72c1_port  }
       name: webserver1
-      image: { get_param: image }
+      image: { get_param: image_id }
       key_name: { get_param: key_name }
       flavor: { get_param: flavor }
       config_drive: "True"
@@ -317,11 +415,13 @@ resources:
     properties:
       floating_network_id: { get_param: public_network_id }
       port_id: { get_resource: server_one_fbd19302-f247-4816-b53e-a664f3dc72c1_port }
+    security_groups: [{ get_param: security_group }]
 
   server_one_fbd19302-f247-4816-b53e-a664f3dc72c1_port:
     type: OS::Neutron::Port
     properties:
       network_id: { get_param: network_id_fbd19302-f247-4816-b53e-a664f3dc72c1 }
+    security_groups: [{ get_param: security_group }]
 
  
 
@@ -330,6 +430,7 @@ resources:
     type: OS::Neutron::Port
     properties:
       network_id: { get_param: network_id_fbd19302-f247-4816-b53e-a664f3dc72c1 }
+    security_groups: [{ get_param: security_group }]
 
   rhel_server_three:
     type: OS::Nova::Server
@@ -338,7 +439,7 @@ resources:
       networks:
           - port: { get_resource: server_three_fbd19302-f247-4816-b53e-a664f3dc72c1_port  }
       name: webserver2
-      image: { get_param: image }
+      image: { get_param: image_id }
       key_name: { get_param: key_name }
       flavor: { get_param: flavor }
       config_drive: "True"
@@ -351,6 +452,7 @@ resources:
     type: OS::Neutron::Port
     properties:
       network_id: { get_param: network_id_fbd19302-f247-4816-b53e-a664f3dc72c1 }
+    security_groups: [{ get_param: security_group }]
 
   rhel_server_four:
     type: OS::Nova::Server
@@ -359,7 +461,7 @@ resources:
       networks:
           - port: { get_resource: server_four_fbd19302-f247-4816-b53e-a664f3dc72c1_port  }
       name: database
-      image: { get_param: image }
+      image: { get_param: image_id }
       key_name: { get_param: key_name }
       flavor: { get_param: flavor }
       config_drive: "True"
@@ -372,11 +474,9 @@ resources:
     type: OS::Neutron::Port
     properties:
       network_id: { get_param: network_id_fbd19302-f247-4816-b53e-a664f3dc72c1 }
+    security_groups: [{ get_param: security_group }]
 
 outputs:
-  blueprint_url:
-    description: Blueprint Origin URL
-    value:  http://9.27.175.179:8080/landscaper/view/projects?open=ucdpadmin_00000000_0000_0000_0000_000000000002-OrionContent/default/open_tier_lamp/three_tier_lamp.yml
     
   zeron_url:
     description: zeron console
