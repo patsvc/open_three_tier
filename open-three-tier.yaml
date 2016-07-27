@@ -410,7 +410,6 @@ resources:
     properties:
       floating_network_id: { get_param: public_network_id }
       port_id: { get_resource: server_one_fbd19302-f247-4816-b53e-a664f3dc72c1_port }
-      security_groups: [{ get_param: security_group }]
 
   server_one_fbd19302-f247-4816-b53e-a664f3dc72c1_port:
     type: OS::Neutron::Port
