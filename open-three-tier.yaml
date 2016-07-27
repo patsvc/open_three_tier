@@ -221,15 +221,14 @@ resources:
             fi
             cat << EOF > /tmp/pillar.yaml
             service_port: 80
-            im_repo: http://192.168.0.29/imrepo/
-            artifact_repo_root: http://134.168.48.212:6111/sw_repo/
+            im_repo: $SW_REPO_ROOT
+            artifact_repo_root: $SW_REPO_ROOT
             mysql_password: $MYSQL_PASSWORD
             ibm:
               sw_repo_root: $SW_REPO_ROOT
             EOF
           params:
             $SW_REPO_ROOT: {get_param: sw_repo_root }
-            $profile_name: {get_param: was_profile_name}
             $MYSQL_PASSWORD: {get_param: mysql_password}
 
   run_orchestration:
