@@ -57,15 +57,12 @@ parameters:
     constraints:
     - custom_constraint: nova.keypair
 
-  network_id_fbd19302-f247-4816-b53e-a664f3dc72c1:
+  network:
     type: string
-    description: Generated to reference 'patterns-service-dev-net' network.
-    default: 'fbd19302-f247-4816-b53e-a664f3dc72c1'
-
-  public_network_id:
-    type: string
-    description: Generated for floating IP
-    default: 'TODO'
+    description: Network to deploy the instances onto
+    label: Network
+    constraints:
+    - custom_constraint: neutron.network
 
 parameter_groups:
     - { label: 'Image Parameters', parameters: [flavor, key_name, image_id] }
@@ -407,13 +404,13 @@ resources:
   server_one_server_one_fbd19302-f247-4816-b53e-a664f3dc72c1_port_floating_ip:
     type: OS::Neutron::FloatingIP
     properties:
-      floating_network_id: { get_param: public_network_id }
+      floating_network_id: { get_param: network }
       port_id: { get_resource: server_one_fbd19302-f247-4816-b53e-a664f3dc72c1_port }
 
   server_one_fbd19302-f247-4816-b53e-a664f3dc72c1_port:
     type: OS::Neutron::Port
     properties:
-      network_id: { get_param: network_id_fbd19302-f247-4816-b53e-a664f3dc72c1 }
+      network_id: { get_param: network }
       security_groups: [{ get_param: security_group }]
 
  
@@ -422,7 +419,7 @@ resources:
   server_two_fbd19302-f247-4816-b53e-a664f3dc72c1_port:
     type: OS::Neutron::Port
     properties:
-      network_id: { get_param: network_id_fbd19302-f247-4816-b53e-a664f3dc72c1 }
+      network_id: { get_param: network }
       security_groups: [{ get_param: security_group }]
 
   rhel_server_three:
@@ -444,7 +441,7 @@ resources:
   server_three_fbd19302-f247-4816-b53e-a664f3dc72c1_port:
     type: OS::Neutron::Port
     properties:
-      network_id: { get_param: network_id_fbd19302-f247-4816-b53e-a664f3dc72c1 }
+      network_id: { get_param: network }
       security_groups: [{ get_param: security_group }]
 
   rhel_server_four:
@@ -466,7 +463,7 @@ resources:
   server_four_fbd19302-f247-4816-b53e-a664f3dc72c1_port:
     type: OS::Neutron::Port
     properties:
-      network_id: { get_param: network_id_fbd19302-f247-4816-b53e-a664f3dc72c1 }
+      network_id: { get_param: network }
       security_groups: [{ get_param: security_group }]
 
 outputs:
