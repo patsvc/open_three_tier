@@ -42,11 +42,6 @@ parameters:
     label: Flavor
     constraints:
     - custom_constraint: nova.flavor
-
-  security_group:
-    type: string
-    description: 'Name of the security group'
-    default: 'default'
    
   image_id:
     type: string
@@ -415,13 +410,13 @@ resources:
     properties:
       floating_network_id: { get_param: public_network_id }
       port_id: { get_resource: server_one_fbd19302-f247-4816-b53e-a664f3dc72c1_port }
-    security_groups: [{ get_param: security_group }]
+      security_groups: [{ get_param: security_group }]
 
   server_one_fbd19302-f247-4816-b53e-a664f3dc72c1_port:
     type: OS::Neutron::Port
     properties:
       network_id: { get_param: network_id_fbd19302-f247-4816-b53e-a664f3dc72c1 }
-    security_groups: [{ get_param: security_group }]
+      security_groups: [{ get_param: security_group }]
 
  
 
@@ -430,7 +425,7 @@ resources:
     type: OS::Neutron::Port
     properties:
       network_id: { get_param: network_id_fbd19302-f247-4816-b53e-a664f3dc72c1 }
-    security_groups: [{ get_param: security_group }]
+      security_groups: [{ get_param: security_group }]
 
   rhel_server_three:
     type: OS::Nova::Server
@@ -452,7 +447,7 @@ resources:
     type: OS::Neutron::Port
     properties:
       network_id: { get_param: network_id_fbd19302-f247-4816-b53e-a664f3dc72c1 }
-    security_groups: [{ get_param: security_group }]
+      security_groups: [{ get_param: security_group }]
 
   rhel_server_four:
     type: OS::Nova::Server
@@ -474,7 +469,7 @@ resources:
     type: OS::Neutron::Port
     properties:
       network_id: { get_param: network_id_fbd19302-f247-4816-b53e-a664f3dc72c1 }
-    security_groups: [{ get_param: security_group }]
+      security_groups: [{ get_param: security_group }]
 
 outputs:
     
