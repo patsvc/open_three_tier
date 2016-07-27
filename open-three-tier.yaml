@@ -192,7 +192,7 @@ resources:
             #Salt state entry - define work of saltstate 
             salt-call event.send 'generate/environment' '{name:'" $UNIQUE_ROLE_ID"', sid: "$IDENTIFIER",  tgt:'" $TARGET"', tgt_type: "compound", salt_env: "$ENV", sls: $SLS , include_pillar: "true" }'      
           params:
-            $ENV: { get_param: environment }
+            $ENV: base
             $ROLES: haproxy
             $IDENTIFIER: { get_param: 'OS::stack_name' }
             $SLS: '["haproxy","zeron"]'
@@ -311,7 +311,7 @@ resources:
             #POST Signal entry to tell stack its complete. 
             salt-call event.send 'generate/environment' '{name:'" $UNIQUE_ROLE_ID"', sid: "$IDENTIFIER",  tgt:'" $TARGET"', tgt_type: "compound", salt_env: "$ENV", sls: $SLS , include_pillar: "true" }'         
           params:
-            $ENV: { get_param: environment }
+            $ENV: base
             $ROLES: apache
             $IDENTIFIER: { get_param: 'OS::stack_name' }
             $SLS: '["apache","zeron"]'
@@ -340,7 +340,7 @@ resources:
             service salt-minion restart
             sleep 60        
           params:
-            $ENV: { get_param: environment }
+            $ENV: base
             $ROLES: apache
             $IDENTIFIER: { get_param: 'OS::stack_name' }
             $SLS: '["apache","zeron"]'
@@ -374,7 +374,7 @@ resources:
             #POST Signal entry to tell stack its complete. 
             salt-call event.send 'generate/environment' '{name: "orchestration_finished", sid: "$IDENTIFIER",  tgt: "G@environment:$ENV and G@orchestrator:master", tgt_type: "compound", salt_env: "$ENV", sls: "'["base.signal"]'", include_pillar: "true" }'
           params:
-            $ENV: { get_param: environment }
+            $ENV: base
             $ROLES: mysql
             $IDENTIFIER: { get_param: 'OS::stack_name' }
             $SLS: '["mysql","zeron"]'
