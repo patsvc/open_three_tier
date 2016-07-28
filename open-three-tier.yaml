@@ -15,9 +15,15 @@ parameters:
 
   mysql_password: 
     description: This is the password for the mysql database
-    label: Password (root)
+    label: MySQL Password
     type: string
     hidden: True
+
+    availability_zone:
+    type: string
+    description: 'Name of availability zone in which to create the instance'
+    label: Availability zone
+    default: 'nova'
 
   salt_master_address:
     type: string
@@ -80,6 +86,7 @@ resources:
       networks:
           - port: { get_resource: server_one_fbd19302-f247-4816-b53e-a664f3dc72c1_port  }
       name: load balancer
+      availability_zone: { get_param: availability_zone }
       key_name: { get_param: key_name }
       image: { get_param: image_id }
       flavor: { get_param: flavor }
@@ -275,6 +282,7 @@ resources:
       networks:
           - port: { get_resource: server_two_fbd19302-f247-4816-b53e-a664f3dc72c1_port  }
       name: webserver1
+      availability_zone: { get_param: availability_zone }
       image: { get_param: image_id }
       key_name: { get_param: key_name }
       flavor: { get_param: flavor }
@@ -432,6 +440,7 @@ resources:
       networks:
           - port: { get_resource: server_three_fbd19302-f247-4816-b53e-a664f3dc72c1_port  }
       name: webserver2
+      availability_zone: { get_param: availability_zone }
       image: { get_param: image_id }
       key_name: { get_param: key_name }
       flavor: { get_param: flavor }
@@ -454,6 +463,7 @@ resources:
       networks:
           - port: { get_resource: server_four_fbd19302-f247-4816-b53e-a664f3dc72c1_port  }
       name: database
+      availability_zone: { get_param: availability_zone }
       image: { get_param: image_id }
       key_name: { get_param: key_name }
       flavor: { get_param: flavor }
