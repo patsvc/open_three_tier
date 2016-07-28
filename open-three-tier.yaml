@@ -19,7 +19,7 @@ parameters:
     type: string
     hidden: True
 
-    availability_zone:
+  availability_zone:
     type: string
     description: 'Name of availability zone in which to create the instance'
     label: Availability zone
