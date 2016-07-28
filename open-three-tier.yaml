@@ -199,7 +199,7 @@ resources:
             #Salt state entry - define work of saltstate 
             salt-call event.send 'generate/environment' '{name:'" $UNIQUE_ROLE_ID"', sid: "$IDENTIFIER",  tgt:'" $TARGET"', tgt_type: "compound", salt_env: "$ENV", sls: $SLS , include_pillar: "true" }'      
           params:
-            $ENV: base
+            $ENV: three_tier_lamp
             $ROLES: haproxy
             $IDENTIFIER: { get_param: 'OS::stack_name' }
             $SLS: '["haproxy","zeron"]'
@@ -269,8 +269,8 @@ resources:
               --salt_token $SALT_API_TOKEN >> /tmp/test
           params:
             $SALT_API_TOKEN: { get_param: salt_api_token}
-            $ENV: base
-            $WORKLOAD_AUTOMATION:  ibm_was
+            $ENV: three_tier_lamp
+            $WORKLOAD_AUTOMATION:  3tier_lamp
             $ORCHESTRATION: 3tier_lamp
             $STACK_ID:      { get_param: "OS::stack_id" }
             $WAIT_URL:      { get_resource: wait_handle }
@@ -318,7 +318,7 @@ resources:
             #POST Signal entry to tell stack its complete. 
             salt-call event.send 'generate/environment' '{name:'" $UNIQUE_ROLE_ID"', sid: "$IDENTIFIER",  tgt:'" $TARGET"', tgt_type: "compound", salt_env: "$ENV", sls: $SLS , include_pillar: "true" }'         
           params:
-            $ENV: base
+            $ENV: three_tier_lamp
             $ROLES: apache
             $IDENTIFIER: { get_param: 'OS::stack_name' }
             $SLS: '["apache","zeron"]'
@@ -347,7 +347,7 @@ resources:
             service salt-minion restart
             sleep 60        
           params:
-            $ENV: base
+            $ENV: three_tier_lamp
             $ROLES: apache
             $IDENTIFIER: { get_param: 'OS::stack_name' }
             $SLS: '["apache","zeron"]'
@@ -381,7 +381,7 @@ resources:
             #POST Signal entry to tell stack its complete. 
             salt-call event.send 'generate/environment' '{name: "orchestration_finished", sid: "$IDENTIFIER",  tgt: "G@environment:$ENV and G@orchestrator:master", tgt_type: "compound", salt_env: "$ENV", sls: "'["base.signal"]'", include_pillar: "true" }'
           params:
-            $ENV: base
+            $ENV: three_tier_lamp
             $ROLES: mysql
             $IDENTIFIER: { get_param: 'OS::stack_name' }
             $SLS: '["mysql","zeron"]'
